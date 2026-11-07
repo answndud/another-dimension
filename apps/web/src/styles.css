@@ -64,6 +64,7 @@ textarea[aria-invalid="true"] { border-color: #ed8f99; }
 #room-status { color: #b7c6bc; }
 .room-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .receipt { margin-left: 8px; color: #9d9da5; font-size: 12px; }
+.retry-message { margin-left: 8px; padding: 3px 7px; font-size: 12px; }
 .messages { min-height: 374px; max-height: 85.8vh; overflow-y: auto; margin: 0; padding: 18px; border: 1px solid #393a40; border-radius: 4px; background: #1d1e22; list-style: none; }
 .messages li + li { margin-top: 20px; }
 .messages li { text-align: left; }

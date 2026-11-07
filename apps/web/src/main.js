@@ -1,3 +1,4 @@
+import { compareMessageOrder, messageInsertionIndex } from "./history-order.js";
 import { RelayRoom } from "./relay-room.js";
 
 const CODE_PREFIX = "AD1-";
@@ -120,21 +121,24 @@ async function enterRoom(code) {
   sessionNote.textContent = remembered ? "" : "새로고침하면 코드를 다시 입력해야 합니다.";
   try {
     const pendingRoom = await RelayRoom.create(code, {
-      status: (status) => { roomStatus.textContent = status; },
+      status: (status) => { if (version === roomVersion) roomStatus.textContent = status; },
       connected: (connected) => {
+        if (version !== roomVersion) return;
         messageInput.disabled = !connected;
         sendButton.disabled = !connected;
+        for (const button of messagesElement.querySelectorAll(".retry-message")) button.disabled = !connected;
         if (connected) markVisibleMessagesRead();
         else historyStatus.textContent = "";
       },
-      message: (message) => receiveMessage(message),
-      receipt: (receipt) => updateReceipt(receipt),
-      historySnapshot: () => ({
+      message: (message) => version === roomVersion && receiveMessage(message),
+      receipt: (receipt) => { if (version === roomVersion) updateReceipt(receipt); },
+      historySnapshot: () => version === roomVersion ? ({
         floor: historyFloor,
-        messages: messages.map(({ id, text, at, mine, read }) => ({ id, text, at, mine, read: read === true })),
-      }),
-      historyBatch: (batch) => restoreHistory(batch),
-      historyStatus: (status) => { historyStatus.textContent = status; },
+        messages: messages.filter((message) => !message.mine || message.delivered || message.read)
+          .map(({ id, text, at, mine, read }) => ({ id, text, at, mine, read: read === true })),
+      }) : null,
+      historyBatch: (batch) => { if (version === roomVersion) restoreHistory(batch); },
+      historyStatus: (status) => { if (version === roomVersion) historyStatus.textContent = status; },
     });
     if (version !== roomVersion) { pendingRoom.close(); return; }
     room = pendingRoom;
@@ -159,10 +163,11 @@ function clearSessionCode() {
 
 function restoreSession() {
   let code;
-  try { code = sessionStorage.getItem(SESSION_CODE_KEY); } catch { return; }
-  if (!code) return;
-  if (!isValidCode(code)) { clearSessionCode(); return; }
+  try { code = sessionStorage.getItem(SESSION_CODE_KEY); } catch { return false; }
+  if (!code) return false;
+  if (!isValidCode(code)) { clearSessionCode(); return false; }
   void enterRoom(code);
+  return true;
 }
 
 document.querySelector("#create-button").addEventListener("click", () => {
@@ -231,13 +236,19 @@ window.addEventListener("beforeunload", (event) => {
 });
 
 window.addEventListener("pagehide", () => {
-  roomVersion++;
   room?.close({ reason: "disconnect" });
+  roomVersion++;
   room = null;
+  messageInput.disabled = true;
+  sendButton.disabled = true;
+  for (const button of messagesElement.querySelectorAll(".retry-message")) button.disabled = true;
 });
 
 window.addEventListener("pageshow", (event) => {
-  if (event.persisted && !room) restoreSession();
+  if (event.persisted && !room && !roomView.hidden && !restoreSession()) {
+    roomStatus.textContent = "연결이 끊겼습니다";
+    historyStatus.textContent = "방을 나간 후 코드를 다시 입력해 주세요.";
+  }
 });
 
 restoreSession();
@@ -250,10 +261,6 @@ function formatTimestamp(time, includeDate = false) {
   return includeDate
     ? `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${clock}:${pad(date.getSeconds())}`
     : clock;
-}
-
-function compareMessageOrder(a, b) {
-  return a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
 function advanceHistoryFloor(floor) {
@@ -271,13 +278,7 @@ function addMessage(message) {
   if (messageElements.has(message.id)) return;
   if (!Number.isSafeInteger(message.at) || Math.abs(message.at) > 8640000000000000) message.at = Date.now();
   if (historyFloor && compareMessageOrder(message, historyFloor) <= 0) return;
-  let low = 0;
-  let high = messages.length;
-  while (low < high) {
-    const middle = (low + high) >>> 1;
-    if (compareMessageOrder(messages[middle], message) < 0) low = middle + 1;
-    else high = middle;
-  }
+  const low = messageInsertionIndex(messages, message);
   messages.splice(low, 0, message);
   const item = document.createElement("li");
   if (message.mine) item.classList.add("message-mine");
@@ -292,11 +293,25 @@ function addMessage(message) {
   if (message.mine) {
     const receipt = document.createElement("span");
     receipt.className = "receipt";
-    receipt.textContent = message.read ? "읽음" : (message.delivered ? "전달됨" : "전달 확인 중");
     item.append(receipt);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "retry-message";
+    retry.textContent = "다시 보내기";
+    retry.addEventListener("click", () => {
+      if (!room?.retryMessage(message)) {
+        messageError.textContent = "메시지를 다시 보낼 수 없습니다.";
+        return;
+      }
+      message.uncertain = false;
+      messageError.textContent = "";
+      renderReceipt(message);
+    });
+    item.append(retry);
   }
   messagesElement.insertBefore(item, messagesElement.children[low] || null);
   messageElements.set(message.id, item);
+  if (message.mine) renderReceipt(message);
   while (messages.length > 10000) {
     const removed = messages.shift();
     messageElements.get(removed.id)?.remove();
@@ -310,18 +325,26 @@ function restoreHistory(batch) {
   // Only locally evicted messages advance the cutoff; a peer cannot erase local history.
   for (const message of batch.messages) {
     const mine = !message.mine;
-    addMessage({ ...message, mine, read: mine && message.read === true, delivered: mine });
+    if (mine && messageElements.has(message.id)) {
+      room?.confirmPendingMessage(message.id);
+      updateReceipt({ id: message.id, type: message.read ? "read" : "delivered" });
+    } else {
+      addMessage({ ...message, mine, read: mine && message.read === true, delivered: mine });
+    }
   }
   markVisibleMessagesRead();
 }
 
 function receiveMessage(message) {
   const existing = messageElements.has(message.id);
+  const previous = existing && messages.find((entry) => entry.id === message.id && !entry.mine);
+  if (previous?.read) room?.sendRead(message.id);
   addMessage({ ...message, mine: false, read: false });
   if (!existing && messageElements.has(message.id)) {
     if (document.visibilityState !== "visible" || !document.hasFocus()) notifyMessage();
     markVisibleMessagesRead();
   }
+  return messages.some((entry) => entry.id === message.id && !entry.mine);
 }
 
 function markVisibleMessagesRead() {
@@ -335,13 +358,23 @@ function markVisibleMessagesRead() {
   }
 }
 
+function renderReceipt(message) {
+  const item = messageElements.get(message.id);
+  if (!item) return;
+  const label = item.querySelector(".receipt");
+  const retry = item.querySelector(".retry-message");
+  label.textContent = message.read ? "읽음" : (message.delivered ? "전달됨" : (message.uncertain ? "전달 여부 확인 불가" : "전달 확인 중"));
+  retry.hidden = !message.uncertain || message.read || message.delivered;
+  retry.disabled = sendButton.disabled;
+}
+
 function updateReceipt(receipt) {
   const message = messages.find((entry) => entry.id === receipt.id && entry.mine);
   if (!message) return;
-  const label = messageElements.get(message.id)?.querySelector(".receipt");
   if (receipt.type === "read") message.read = true;
   if (receipt.type === "delivered") message.delivered = true;
-  if (label) label.textContent = message.read ? "읽음" : (message.delivered ? "전달됨" : "전달 확인 중");
+  if (receipt.type === "uncertain" && !message.read && !message.delivered) message.uncertain = true;
+  renderReceipt(message);
 }
 
 function updateNotificationButton() {

@@ -13,6 +13,12 @@ const HISTORY_BATCH_BYTES = 24000;
 const HISTORY_MAX_MESSAGES = 10000;
 const HISTORY_RETRY_MS = 3000;
 const HISTORY_RETRIES = 8;
+const DELIVERY_RETRY_MS = 2000;
+const DELIVERY_ATTEMPTS = 4;
+const MAX_PENDING_MESSAGES = 100;
+const MAX_BUFFERED_BYTES = 256 * 1024;
+const RELAY_EVENT_BURST = 400;
+const RELAY_EVENTS_PER_SECOND = 200;
 
 function base64(bytes) {
   let result = '';
@@ -44,10 +50,14 @@ function validFloor(floor) {
 
 export class RelayRoom {
   static async create(code, handlers) {
+    if (typeof code !== 'string' || !/^AD1-[A-Za-z0-9_-]{86}$/.test(code)) throw new Error('invalid room code');
     const encoded = code.slice(4).replaceAll('-', '+').replaceAll('_', '/');
-    const raw = Uint8Array.from(atob(encoded + '=='), (character) => character.charCodeAt(0));
-    const material = await crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveBits']);
-    raw.fill(0);
+    const decoded = atob(encoded + '==');
+    if (decoded.length !== 64 || btoa(decoded).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '') !== code.slice(4)) throw new Error('invalid room code');
+    const raw = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+    let material;
+    try { material = await crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveBits']); }
+    finally { raw.fill(0); }
     const derive = (label) => crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: encoder.encode('another-dimension/room/v1'), info: encoder.encode(label) }, material, 256);
     const [topic, key] = await Promise.all([derive('rendezvous-topic'), derive('noise-psk')]);
     return new RelayRoom(hex(new Uint8Array(topic)), new Uint8Array(key), handlers);
@@ -62,6 +72,7 @@ export class RelayRoom {
     this.instance = newInstance();
     this.sockets = new Map();
     this.seenEvents = new Set();
+    this.publishedEvents = new Set();
     this.peer = null;
     this.busyPeers = new Map();
     this.busyUntil = 0;
@@ -71,6 +82,9 @@ export class RelayRoom {
     this.received = new Set();
     this.highestReceived = -1;
     this.pendingTimers = new Set();
+    this.pendingMessages = new Map();
+    this.relayAttempts = new Map();
+    this.transportAvailable = false;
     this.startedAt = Date.now();
   }
 
@@ -84,45 +98,93 @@ export class RelayRoom {
     if (this.closed) return;
     let socket;
     try { socket = new WebSocket(url); } catch {
-      const timer = setTimeout(() => { this.pendingTimers.delete(timer); this.connectRelay(url); }, 5000);
-      this.pendingTimers.add(timer);
+      this.scheduleRelayReconnect(url);
       return;
     }
     this.sockets.set(url, socket);
     socket.addEventListener('open', () => {
       if (this.closed) return;
-      socket.send(JSON.stringify(['REQ', 'room', { kinds: [KIND], '#t': [this.topic], limit: 0 }]));
+      try { socket.send(JSON.stringify(['REQ', 'room', { kinds: [KIND], '#t': [this.topic], limit: 0 }])); } catch { socket.close(); return; }
+      const stableTimer = setTimeout(() => { this.pendingTimers.delete(stableTimer); if (this.sockets.get(url) === socket && socket.readyState === WebSocket.OPEN) this.relayAttempts.delete(url); }, 30000);
+      socket.stableTimer = stableTimer;
+      this.pendingTimers.add(stableTimer);
+      this.updateTransport();
     });
-    socket.addEventListener('message', (event) => this.receiveRelay(event));
+    socket.addEventListener('message', (event) => this.receiveRelay(event, socket));
     socket.addEventListener('error', () => socket.close());
     socket.addEventListener('close', () => {
       if (this.sockets.get(url) === socket) this.sockets.delete(url);
-      if (!this.closed) {
-        const timer = setTimeout(() => { this.pendingTimers.delete(timer); this.connectRelay(url); }, 5000);
-        this.pendingTimers.add(timer);
-      }
+      for (const timer of [socket.stableTimer, socket.blockTimer]) { clearTimeout(timer); this.pendingTimers.delete(timer); }
+      this.updateTransport();
+      if (!this.closed) this.scheduleRelayReconnect(url);
     });
+  }
+
+  scheduleRelayReconnect(url) {
+    const attempts = this.relayAttempts.get(url) || 0;
+    this.relayAttempts.set(url, attempts + 1);
+    const delay = Math.min(30000, 1000 * 2 ** Math.min(attempts, 5));
+    const timer = setTimeout(() => { this.pendingTimers.delete(timer); this.connectRelay(url); }, delay + Math.random() * 500);
+    this.pendingTimers.add(timer);
+  }
+
+  hasTransport() {
+    return this.peer?.channel?.readyState === 'open' || [...this.sockets.values()].some((socket) => socket.readyState === WebSocket.OPEN && !(socket.blockedUntil > Date.now()));
+  }
+
+  updateTransport() {
+    const available = Boolean(this.online && this.hasTransport());
+    if (available === this.transportAvailable) return;
+    this.transportAvailable = available;
+    if (!available) {
+      this.cancelPendingMessages();
+      clearTimeout(this.peer?.historyIncoming?.timer);
+      clearTimeout(this.peer?.historyOutgoing?.timer);
+      if (this.peer) this.peer.historyOutgoing = null;
+    }
+    this.handlers.connected(available);
+    if (this.online) {
+      this.handlers.status(available ? '연결됨' : '연결이 끊겼습니다');
+      if (!available && this.peer?.historyIncoming && !this.peer.historyIncoming.done) {
+        this.handlers.historyStatus?.('연결이 끊겨 대화 동기화가 중단되었습니다.');
+      } else if (available && this.peer?.historyIncoming) {
+        this.startHistorySync(this.peer);
+      }
+    }
   }
 
   publish(payload) {
     if (this.closed) return false;
     const wire = finalizeEvent({ kind: KIND, created_at: Math.floor(Date.now() / 1000), tags: [['t', this.topic]], content: JSON.stringify(payload) }, this.signingKey);
+    this.publishedEvents.add(wire.id);
+    if (this.publishedEvents.size > 512) this.publishedEvents.delete(this.publishedEvents.values().next().value);
     const message = JSON.stringify(['EVENT', wire]);
     let sent = false;
     for (const socket of this.sockets.values()) {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket.readyState === WebSocket.OPEN && !(socket.blockedUntil > Date.now()) && (socket.bufferedAmount || 0) < MAX_BUFFERED_BYTES) {
         try { socket.send(message); sent = true; } catch { /* Another relay may still be available. */ }
       }
     }
     return sent;
   }
 
-  receiveRelay(event) {
+  receiveRelay(event, socket) {
     if (typeof event.data !== 'string' || event.data.length > MAX_EVENT_SIZE) return;
     let packet;
     try { packet = JSON.parse(event.data); } catch { return; }
+    if (packet[0] === 'OK' && packet[2] === false && socket && this.publishedEvents.has(packet[1]) && !String(packet[3] || '').startsWith('duplicate:')) {
+      socket.blockedUntil = Date.now() + 10000;
+      this.updateTransport();
+      clearTimeout(socket.blockTimer);
+      this.pendingTimers.delete(socket.blockTimer);
+      const timer = setTimeout(() => { this.pendingTimers.delete(timer); this.updateTransport(); }, 10000);
+      socket.blockTimer = timer;
+      this.pendingTimers.add(timer);
+      return;
+    }
     if (packet[0] === 'EOSE' && packet[1] === 'room') { this.hello(); return; }
     if (packet[0] !== 'EVENT' || packet[1] !== 'room') return;
+    if (socket && !this.allowRelayEvent(socket)) return;
     const wire = packet[2];
     if (!wire || wire.kind !== KIND || wire.pubkey === this.id || typeof wire.content !== 'string' || wire.content.length > MAX_EVENT_SIZE || !Array.isArray(wire.tags) || !wire.tags.some((tag) => Array.isArray(tag) && tag[0] === 't' && tag[1] === this.topic)) return;
     if (Math.abs(Math.floor(Date.now() / 1000) - wire.created_at) > 300 || this.seenEvents.has(wire.id)) return;
@@ -133,6 +195,16 @@ export class RelayRoom {
     try { body = JSON.parse(wire.content); } catch { return; }
     if (!body || body.v !== 1 || typeof body.t !== 'string' || !/^[0-9a-f]{32}$/.test(body.instance || '')) return;
     try { this.handle(wire.pubkey, body); } catch { /* Discard malformed or unauthenticated input. */ }
+  }
+
+  allowRelayEvent(socket) {
+    const now = Date.now();
+    const elapsed = Math.max(0, now - (socket.eventBudgetTime ?? now));
+    socket.eventBudget = Math.min(RELAY_EVENT_BURST, (socket.eventBudget ?? RELAY_EVENT_BURST) + elapsed * RELAY_EVENTS_PER_SECOND / 1000);
+    socket.eventBudgetTime = now;
+    if (socket.eventBudget < 1) return false;
+    socket.eventBudget--;
+    return true;
   }
 
   hello() { this.publish({ v: 1, t: 'hello', instance: this.instance }); }
@@ -218,11 +290,23 @@ export class RelayRoom {
 
   sendPayload(payload, relayOnly = false) {
     const peer = this.peer;
-    if (!peer?.sendCipher || this.sequence > MAX_SEQUENCE) return false;
+    if (!peer?.sendCipher) return false;
+    if (this.sequence > MAX_SEQUENCE) {
+      if (!peer.exhaustionScheduled) {
+        peer.exhaustionScheduled = true;
+        queueMicrotask(() => {
+          if (!this.closed && this.peer === peer) {
+            this.handlers.status('연결을 다시 설정하는 중');
+            this.resetPeer(false);
+          }
+        });
+      }
+      return false;
+    }
     const frame = { v: 1, t: 'frame', instance: this.instance, to: peer.id, targetInstance: peer.instance, fromInstance: this.instance, toInstance: peer.instance, seq: this.sequence++ };
     peer.sendCipher.setNonce(frame.seq);
     frame.data = base64(peer.sendCipher.encrypt(encoder.encode(JSON.stringify(payload)), associatedData(frame, this.id)));
-    if (!relayOnly && peer.channel?.readyState === 'open') {
+    if (!relayOnly && peer.channel?.readyState === 'open' && (peer.channel.bufferedAmount || 0) < MAX_BUFFERED_BYTES) {
       try { peer.channel.send(JSON.stringify(frame)); return true; } catch { /* Use the relay below. */ }
     }
     return this.publish(frame);
@@ -262,13 +346,13 @@ export class RelayRoom {
       this.handleHistoryBatch(payload);
     } else if (this.online && payload.type === 'history-ack') {
       this.handleHistoryAck(payload);
-    } else if (this.online && payload.type === 'message' && typeof payload.id === 'string' && /^[0-9a-f]{32}$/.test(payload.id) && typeof payload.text === 'string' && Array.from(payload.text).length <= 4000 && payload.text.length > 0) {
-      this.handlers.message(payload);
-      this.sendPayload({ type: 'delivered', id: payload.id });
+    } else if (this.online && payload.type === 'message' && typeof payload.id === 'string' && /^[0-9a-f]{32}$/.test(payload.id) && typeof payload.text === 'string' && Array.from(payload.text).length <= 4000 && payload.text.length > 0 && Number.isSafeInteger(payload.at) && Math.abs(payload.at) <= 8640000000000000) {
+      if (this.handlers.message(payload) !== false) this.sendPayload({ type: 'delivered', id: payload.id });
     } else if (this.online && (payload.type === 'delivered' || payload.type === 'read') && typeof payload.id === 'string' && /^[0-9a-f]{32}$/.test(payload.id)) {
+      this.confirmPendingMessage(payload.id);
       this.handlers.receipt?.(payload);
     } else if (this.online && payload.type === 'read-batch' && Array.isArray(payload.ids) && payload.ids.length <= 20 && payload.ids.every((id) => typeof id === 'string' && /^[0-9a-f]{32}$/.test(id))) {
-      for (const id of payload.ids) this.handlers.receipt?.({ type: 'read', id });
+      for (const id of payload.ids) { this.confirmPendingMessage(id); this.handlers.receipt?.({ type: 'read', id }); }
     }
   }
 
@@ -278,7 +362,7 @@ export class RelayRoom {
     this.busyUntil = 0;
     this.peer.lastSeen = Date.now();
     this.handlers.status('연결됨');
-    this.handlers.connected(true);
+    this.updateTransport();
     const peer = this.peer;
     if (peer.initiator) void this.startDirect().catch(() => { if (this.peer === peer) this.closeDirect(); });
     this.startHistorySync(peer);
@@ -356,6 +440,7 @@ export class RelayRoom {
 
   startHistorySync(peer) {
     if (!this.handlers.historySnapshot || !this.handlers.historyBatch) return;
+    clearTimeout(peer.historyIncoming?.timer);
     const incoming = { id: newInstance(), expected: 0, count: 0, attempts: 0, started: false, done: false, timer: null };
     peer.historyIncoming = incoming;
     this.handlers.historyStatus?.('대화 동기화 중');
@@ -416,7 +501,7 @@ export class RelayRoom {
       if (!this.sendPayload(ack, true)) this.sendPayload(ack);
       return;
     }
-    if (payload.index !== incoming.expected || !Array.isArray(payload.entries) || payload.entries.length > HISTORY_BATCH_ITEMS ||
+    if (incoming.done || payload.index !== incoming.expected || !Array.isArray(payload.entries) || payload.entries.length > HISTORY_BATCH_ITEMS ||
         incoming.count + payload.entries.length > HISTORY_MAX_MESSAGES || typeof payload.done !== 'boolean' ||
         (!payload.done && payload.entries.length === 0) || !validFloor(payload.floor) || !payload.entries.every(validMessage)) return;
     clearTimeout(incoming.timer);
@@ -470,7 +555,8 @@ export class RelayRoom {
         if (frame.v === 1 && frame.t === 'frame' && frame.to === this.id && frame.targetInstance === this.instance) this.receiveFrame(peer.id, frame);
       } catch { /* Ignore unauthenticated or malformed frames. */ }
     };
-    channel.onclose = () => { if (this.peer === peer && peer.channel === channel) peer.channel = null; };
+    channel.onopen = () => { if (this.peer === peer && peer.channel === channel) this.updateTransport(); };
+    channel.onclose = () => { if (this.peer === peer && peer.channel === channel) { peer.channel = null; this.updateTransport(); } };
   }
 
   async startDirect() {
@@ -512,12 +598,49 @@ export class RelayRoom {
     peer.channel?.close();
     peer.channel = null;
     connection?.close();
+    this.updateTransport();
   }
 
   sendMessage(text, at = Date.now()) {
-    if (!this.online || !text || Array.from(text).length > 4000) return null;
-    const id = newInstance();
-    return this.sendPayload({ type: 'message', id, text, at }) ? { id, text, at } : null;
+    if (!this.online || !this.hasTransport() || !text || Array.from(text).length > 4000) return null;
+    const message = { id: newInstance(), text, at };
+    return this.retryMessage(message) ? message : null;
+  }
+
+  retryMessage(message) {
+    if (!this.online || !this.hasTransport() || this.pendingMessages.size >= MAX_PENDING_MESSAGES ||
+        !validMessage({ ...message, mine: true }) || this.pendingMessages.has(message.id)) return false;
+    const pending = { message: { id: message.id, text: message.text, at: message.at }, peer: this.peer, attempts: 0, timer: null };
+    this.pendingMessages.set(message.id, pending);
+    this.attemptMessage(pending);
+    return true;
+  }
+
+  attemptMessage(pending) {
+    if (this.pendingMessages.get(pending.message.id) !== pending) return;
+    if (!this.online || this.peer !== pending.peer || !this.hasTransport() || pending.attempts >= DELIVERY_ATTEMPTS) {
+      this.finishPendingMessage(pending, true);
+      return;
+    }
+    pending.attempts++;
+    this.sendPayload({ type: 'message', ...pending.message }, pending.attempts % 2 === 0);
+    pending.timer = setTimeout(() => this.attemptMessage(pending), DELIVERY_RETRY_MS);
+  }
+
+  finishPendingMessage(pending, uncertain) {
+    if (this.pendingMessages.get(pending.message.id) !== pending) return;
+    clearTimeout(pending.timer);
+    this.pendingMessages.delete(pending.message.id);
+    if (uncertain) this.handlers.receipt?.({ type: 'uncertain', id: pending.message.id });
+  }
+
+  confirmPendingMessage(id) {
+    const pending = this.pendingMessages.get(id);
+    if (pending) this.finishPendingMessage(pending, false);
+  }
+
+  cancelPendingMessages() {
+    for (const pending of this.pendingMessages.values()) this.finishPendingMessage(pending, true);
   }
 
   sendRead(id) { return this.online && this.sendPayload({ type: 'read', id }); }
@@ -529,6 +652,8 @@ export class RelayRoom {
 
   resetPeer(update = true) {
     this.online = false;
+    this.cancelPendingMessages();
+    this.transportAvailable = false;
     this.handlers.connected(false);
     this.clearPeerKeys();
     this.peer = null;
@@ -548,6 +673,9 @@ export class RelayRoom {
       if (direct) this.sendPayload({ type: reason }, true);
     }
     this.closed = true;
+    this.online = false;
+    this.cancelPendingMessages();
+    this.transportAvailable = false;
     clearInterval(this.tickTimer);
     for (const timer of this.pendingTimers) clearTimeout(timer);
     for (const socket of this.sockets.values()) socket.close();
