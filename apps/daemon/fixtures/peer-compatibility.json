@@ -1,8 +1,0 @@
-{
-  "wire": "another-dimension/peer-hello/v1",
-  "cases": [
-    { "name": "current", "protocol_version": 1, "accepted": true },
-    { "name": "legacy", "protocol_version": 0, "accepted": false },
-    { "name": "future", "protocol_version": 2, "accepted": false }
-  ]
-}

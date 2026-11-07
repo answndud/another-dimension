@@ -2,8 +2,7 @@ name: Verify
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -12,15 +11,18 @@ permissions:
 
 jobs:
   verify:
-    name: Lightweight verification
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Verify current daemon/web/relay product
-        run: CARGO_BUILD_JOBS=2 scripts/verify_full.sh --release
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: apps/web
+      - run: bash scripts/verify_light.sh
+      - run: npm test
+        working-directory: apps/web
+      - run: npm run build
+        working-directory: apps/web

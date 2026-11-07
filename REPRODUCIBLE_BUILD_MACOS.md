@@ -1,5 +1,7 @@
 # macOS 재현 빌드 메모
 
+> 이전 daemon 기반 제품의 기록입니다. 현재 브라우저 제품의 빌드 안내가 아닙니다.
+
 현재 제품은 Rust daemon, Rust relay, Rust release tools와 정적 웹 UI로 구성됩니다.
 Node.js/npm은 빌드·릴레이·설치에 사용하지 않습니다.
 

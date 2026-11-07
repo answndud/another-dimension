@@ -1,17 +1,114 @@
 <!doctype html>
 <html lang="ko">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f7f7f7" />
-    <meta name="description" content="A browser-local encrypted messenger." />
-    <meta name="referrer" content="no-referrer" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <link rel="manifest" href="/manifest.webmanifest" />
-    <title>Another Dimension Chat</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Another Dimension</title>
+    <link rel="stylesheet" href="./src/styles.css">
+    <script type="module" src="./src/main.js"></script>
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <header class="site-header">
+      <h1><button type="button" class="site-logo" data-home>ANOTHER DIMENSION</button></h1>
+      <button type="button" id="privacy-open">개인정보 안내</button>
+    </header>
+
+    <main>
+      <section id="home-view" class="panel" aria-labelledby="home-title">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">PRIVATE SPACE</p>
+            <h2 id="home-title" tabindex="-1">대화를 시작하세요</h2>
+            <p class="intro">코드 하나로 연결되는 두 사람만의 공간</p>
+          </div>
+        </div>
+        <div class="panel-content">
+          <div class="home-actions">
+            <button type="button" id="create-button"><span class="action-icon" aria-hidden="true">✦</span><span><strong>코드 생성</strong><small>새로운 대화 공간 만들기</small></span><span class="action-arrow" aria-hidden="true">↗</span></button>
+            <button type="button" id="open-join-button"><span class="action-icon" aria-hidden="true">↳</span><span><strong>방 입장</strong><small>가지고 있는 코드로 연결하기</small></span><span class="action-arrow" aria-hidden="true">↗</span></button>
+          </div>
+        </div>
+      </section>
+
+      <section id="create-view" class="panel single-panel" aria-labelledby="create-title" hidden>
+        <div class="panel-header">
+          <h2 id="create-title" tabindex="-1">코드 생성</h2>
+          <button type="button" data-home>취소</button>
+        </div>
+        <div class="panel-content">
+          <p>코드를 따로 보관하세요. 다시 보여드릴 수 없습니다.</p>
+          <p>코드를 가진 사람은 방에 입장할 수 있습니다.</p>
+          <label for="created-code">입장 코드</label>
+          <textarea id="created-code" rows="4" readonly spellcheck="false"></textarea>
+          <div class="actions">
+            <button type="button" id="copy-button">코드 복사</button>
+            <button type="button" id="save-button">TXT 저장</button>
+            <button type="button" id="created-join-button">방 입장</button>
+          </div>
+          <p id="create-feedback" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section id="join-view" class="panel single-panel" aria-labelledby="join-title" hidden>
+        <div class="panel-header">
+          <h2 id="join-title" tabindex="-1">방 입장</h2>
+          <button type="button" data-home>취소</button>
+        </div>
+        <div class="panel-content">
+          <form id="join-form" novalidate>
+            <label for="join-code">입장 코드</label>
+            <textarea id="join-code" rows="4" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="join-error"></textarea>
+            <p id="join-error" role="alert"></p>
+            <div class="actions"><button type="submit">방 입장</button></div>
+          </form>
+        </div>
+      </section>
+
+      <section id="room-view" class="panel single-panel" aria-labelledby="room-title" hidden>
+        <div class="panel-header">
+          <h2 id="room-title" tabindex="-1">대화방</h2>
+          <div class="room-controls">
+            <button type="button" id="notification-button" hidden>알림 허용</button>
+            <button type="button" data-home>방 나가기</button>
+          </div>
+        </div>
+        <div class="panel-content">
+          <p id="room-status" role="status" aria-live="polite">연결 중</p>
+          <p id="session-note" role="status"></p>
+          <p id="history-status" role="status"></p>
+          <p class="message-note">최근 10,000개 메시지만 유지하며, 오래된 메시지는 자동 삭제됩니다.</p>
+          <ol id="messages" class="messages" aria-label="대화 내용" aria-live="polite"></ol>
+          <form id="message-form">
+            <label for="message-input">메시지</label>
+            <textarea id="message-input" rows="3" disabled></textarea>
+            <div class="actions">
+              <button type="submit" id="send-button" disabled>보내기</button>
+              <button type="button" id="save-chat-button">대화 저장</button>
+            </div>
+            <p id="message-error" role="alert"></p>
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+      <div class="dialog-icon" aria-hidden="true">✦</div>
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-description"></p>
+      <form method="dialog" class="dialog-actions">
+        <button type="submit" value="cancel" autofocus>취소</button>
+        <button type="submit" value="confirm" class="dialog-primary" id="confirm-action">확인</button>
+      </form>
+    </dialog>
+
+    <dialog id="privacy-dialog" aria-labelledby="privacy-title">
+      <div class="dialog-icon" aria-hidden="true">✦</div>
+      <h2 id="privacy-title">개인정보 안내</h2>
+      <p>새로고침 후 재연결할 수 있도록 코드를 현재 탭에 임시 저장합니다. 방을 나가면 삭제합니다. 코드는 직접 보관해야 합니다.</p>
+      <p>방에 남아 있는 대화는 같은 코드를 가진 사람이 재입장하면 전달됩니다. 대화 내용과 코드는 외부 연결 서비스에 평문으로 보내지 않습니다.</p>
+      <div class="dialog-actions"><button type="button" class="dialog-primary" id="privacy-close">닫기</button></div>
+    </dialog>
+    <noscript>이 페이지를 사용하려면 JavaScript가 필요합니다.</noscript>
   </body>
 </html>

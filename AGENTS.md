@@ -2,47 +2,28 @@
 
 ## 프로젝트 방향
 
-- 이 프로젝트는 "서버 없는 채팅"이 아니라 `no central trusted server` 기반 고위험 1:1 보안 메신저를 목표로 한다.
-- 전화번호, 이메일, 글로벌 계정, 검색 가능한 username, 중앙 contact discovery, 중앙 메시지 서버, 푸시 알림, 클라우드 백업은 v0.1 범위가 아니다.
+- Another Dimension은 계정과 운영자 서버 없이 사용하는 휘발성 1:1 브라우저 채팅을 목표로 한다.
+- macOS Chrome과 Android Chrome을 지원 대상으로 한다. 정적 웹은 GitHub Pages 기본 주소를 목표로 한다.
+- 두 사람이 온라인으로 연결된 동안 텍스트만 교환한다. 코드는 사용자가 보관하고 재사용하며, 새로고침 후 재연결을 위해 현재 탭의 세션 저장소에도 임시 보관한다. 대화는 메모리에만 유지하고 사용자가 명시적으로 TXT를 저장할 수 있다.
+- 순수 HTML·CSS·JavaScript 화면을 기본으로 한다. 실제로 필요한 보안·통신 의존성만 버전을 고정하여 추가한다.
+- 직접 연결을 우선하고 공개 relay 대체 경로를 검토한다. 상대 인증, 암호화, 재전송 방지와 relay 신뢰 경계가 확인되기 전에는 보안 기능이 완성됐다고 주장하지 않는다.
+- 계정·고정 ID·연락처·그룹·오프라인 메시지·백업·서버 운영은 현재 범위가 아니다.
 
-## 필요할 때 볼 파일
+## 필요한 파일
 
-- `Cargo.toml`: Rust workspace 구성.
-- `README.md`: public-safe project overview and development commands.
-- `SECURITY.md`: public security policy and non-claims.
-- `apps/daemon/src/main.rs`: current daemon CLI entrypoint.
-- `apps/daemon/src/bridge_http.rs`: authenticated local UI bridge.
-- `apps/daemon/src/mls_session.rs`: OpenMLS 1:1 session ownership.
-- `scripts/verify_light.sh`: current web/server lightweight verification entrypoint.
-- `scripts/verify_full.sh`: daemon/web/relay pre-release verification entrypoint.
-- `docs/`는 public repository에 올리지 않는 private planning/security notes이며 `.gitignore`에 포함되어 있다.
-
-## 제품 경계
-
-- 현재 제품 경로는 `apps/web`, `apps/daemon`, `apps/relay`, `apps/tools`뿐이다.
-- legacy Tauri/native/Olm/onion 소스와 전용 CI는 제거됐으며 git history만 archive다.
+- `apps/web/`: 정적 웹 제품 경로.
+- `scripts/verify_light.sh`: 짧은 기본 검증.
+- `README.md`, `SECURITY.md`: 현재 상태와 공개 보안 설명.
+- `docs/`: Git에 포함하지 않는 private 계획 및 실험. 기존 `reference/`, `docs2/`, `capture/`는 이전 제품의 역사 자료이며 현재 동작의 근거가 아니다.
 
 ## 작업 상태 문서
 
-- 장기/다단계 작업을 이어받을 때만 `docs/PLAN.md`를 읽는다. 단일 코드 수정이나 명확한 질문 답변을 문서 갱신 작업으로 확장하지 않는다.
-- 작업 상태 문서는 `docs/PLAN.md` 하나만 사용한다.
-- `docs/PLAN.md`에는 현재 goal, observable finish state, 남은 executable slice, blocker, 정확한 검증 명령, 필요하면 짧은 backlog만 기록한다.
-- 완료된 slice나 phase는 `docs/PLAN.md`에서 제거하고, 다음 실행할 일을 위에서부터 바로 시작할 수 있게 다시 정렬한다.
-- 과거 완료 이력은 별도 `docs/DONE.md`로 관리하지 않는다. 정말 필요하면 git history나 관련 source/doc context로 확인한다.
-- `docs/PROGRESS.md` 같은 상시 상태 문서는 사용하지 않는다.
+- 장기·다단계 작업을 이어받을 때만 `docs/PLAN.md`를 읽는다. 단일 수정이나 질문을 문서 작업으로 확장하지 않는다.
+- 작업 상태 문서는 `docs/PLAN.md` 하나만 사용한다. 현재 목표, 완료 조건, 남은 실행 순서, blocker와 정확한 검증 명령만 기록한다.
+- 완료된 작업은 계획에서 제거한다. 완료 이력은 별도 문서 대신 Git 이력과 관련 맥락으로 확인한다.
 
-## 저장소 용량 관리
+## 빌드와 검증
 
-- 프로젝트 폴더 용량이 비대해지면 먼저 빌드 캐시와 target 산출물을 확인한다.
-- 용량 확인은 `du -sh . ./* ./.??* 2>/dev/null | sort -h | tail`처럼 큰 항목만 좁혀서 본다.
-- 삭제 우선 후보는 재생성 가능한 산출물인 `target/`, `.build-cache/cargo-target/`이다.
-- 소스, 문서, private smoke input, git metadata를 삭제하지 않는다.
-- 사용자가 정리를 요청했거나 명확히 용량 문제가 발생한 경우에는 위 빌드/cache 산출물을 제거해 프로젝트 폴더를 줄인다.
-
-## 빌드/테스트 기본 원칙
-
-- 의존성 다운로드는 최소화한다. 새 crate fetch나 대규모 재동기화가 필요한 명령은 먼저 피하고, 이미 내려받은 의존성을 재사용한다.
-- 기본 검증은 `cargo check` 또는 짧은 focused check를 우선한다.
-- 긴 테스트, 전체 통합 테스트, 장시간 빌드는 사용자가 명시적으로 요청했을 때만 수행한다.
-- 어떤 검증을 고를지 애매하면 먼저 가장 짧은 focused check를 선택하고, 필요한 경우에만 범위를 넓힌다.
-- CPU 사용량이 큰 장시간 작업은 기본으로 피한다. 필요한 경우에도 먼저 짧은 경계 검증으로 대체할 수 있는지 확인한다.
+- 의존성 다운로드를 최소화하고 짧은 focused check를 우선한다. 긴 테스트, 전체 통합 테스트, 장시간 빌드는 사용자가 명시적으로 요청했을 때만 수행한다.
+- 기본 검증은 `bash scripts/verify_light.sh`이다. 사용자가 실제 macOS Chrome과 Android Chrome에서 직접 수동 검증한다.
+- 디스크 정리 시 재생성 가능한 `target/`, `.build-cache/cargo-target/`을 우선 확인하며, 소스·문서·private 실험 입력·Git metadata는 보존한다.
