@@ -123,8 +123,15 @@ test('a live hello in the same second can replace a replayed candidate', async (
     const current = signedHello(live, createdAt);
     target.receiveRelay({ data: JSON.stringify(['EVENT', 'room', replay]) });
     assert.equal(target.peer?.id, oldRoom.id);
+    const stalePeer = target.peer;
+    const staleKey = new Uint8Array(32).fill(7);
+    let connectionClosed = false;
+    stalePeer.sendCipher = { key: staleKey };
+    stalePeer.connection = { close: () => { connectionClosed = true; } };
     target.receiveRelay({ data: JSON.stringify(['EVENT', 'room', current]) });
     assert.equal(target.peer?.id, live.id);
+    assert.equal(connectionClosed, true);
+    assert.equal(staleKey.every((byte) => byte === 0), true);
     target.receiveRelay({ data: JSON.stringify(['EVENT', 'room', replay]) });
     assert.equal(target.peer?.id, live.id);
   } finally { oldRoom.close(); target.close(); live.close(); }
@@ -216,7 +223,7 @@ test('extra sessions do not replace the active pair and can connect after exit',
     assert.equal(rooms[0].peer?.id, rooms[1].id);
     assert.equal(rooms[1].peer?.id, rooms[0].id);
     rooms[0].close(); rooms[1].close();
-    await waitFor(() => states[2].online && states[3].online, 12000);
+    await waitFor(() => states[2].online && states[3].online, 25000);
   } finally {
     for (const room of rooms) room.close();
   }

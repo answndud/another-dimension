@@ -242,6 +242,7 @@ export class RelayRoom {
   }
 
   setPeer(id, instance, helloCreatedAt = 0) {
+    if (this.peer) this.clearPeerKeys();
     const peer = { id, instance, helloCreatedAt, started: Date.now(), lastSeen: Date.now(), initiator: this.id < id };
     const first = peer.initiator ? { id: this.id, instance: this.instance } : peer;
     const second = peer.initiator ? peer : { id: this.id, instance: this.instance };
