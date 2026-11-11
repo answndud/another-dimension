@@ -156,10 +156,11 @@ export class RelayRoom {
 
   publish(payload) {
     if (this.closed) return false;
-    const content = JSON.stringify(payload);
+    const createdAt = Math.floor(Date.now() / 1000);
+    const content = JSON.stringify(['another-dimension/relay-auth/v2', this.topic, this.id, KIND, createdAt, payload]);
     const mac = new Uint8Array(32);
     crypto_auth(mac, encoder.encode(content), this.authKey);
-    const wire = finalizeEvent({ kind: KIND, created_at: Math.floor(Date.now() / 1000), tags: [['t', this.topic]], content: JSON.stringify({ ...payload, auth: base64(mac) }) }, this.signingKey);
+    const wire = finalizeEvent({ kind: KIND, created_at: createdAt, tags: [['t', this.topic]], content: JSON.stringify({ ...payload, auth: base64(mac) }) }, this.signingKey);
     this.publishedEvents.add(wire.id);
     if (this.publishedEvents.size > 512) this.publishedEvents.delete(this.publishedEvents.values().next().value);
     const message = JSON.stringify(['EVENT', wire]);
@@ -201,7 +202,8 @@ export class RelayRoom {
     const { auth, ...payload } = body;
     let mac;
     try { mac = Uint8Array.from(atob(auth), (character) => character.charCodeAt(0)); } catch { return; }
-    if (mac.length !== 32 || !crypto_auth_verify(mac, encoder.encode(JSON.stringify(payload)), this.authKey)) return;
+    const authenticated = JSON.stringify(['another-dimension/relay-auth/v2', this.topic, wire.pubkey, wire.kind, wire.created_at, payload]);
+    if (mac.length !== 32 || !crypto_auth_verify(mac, encoder.encode(authenticated), this.authKey)) return;
     try { this.handle(wire.pubkey, payload); } catch { /* Discard malformed or unauthenticated input. */ }
   }
 
@@ -225,7 +227,7 @@ export class RelayRoom {
     }
     if (!this.peer) {
       const relayAvailable = [...this.sockets.values()].some((socket) => socket.readyState === WebSocket.OPEN);
-      this.handlers.status(Date.now() < this.busyUntil ? '이미 연결되어 있습니다' : (relayAvailable ? '상대방을 기다리는 중' : '연결 중'));
+      this.handlers.status(Date.now() < this.busyUntil ? '이미 연결되어 있습니다' : (relayAvailable ? '상대방을 기다리는 중. 연결되지 않으면 양쪽에서 새로고침해 주세요.' : '연결 중'));
       return;
     }
     if (!this.online && Date.now() - this.peer.started > 15000) { this.resetPeer(); return; }

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto, randomBytes } from 'node:crypto';
 import { build } from 'esbuild';
+import { finalizeEvent, generateSecretKey } from 'nostr-tools';
 
 if (!globalThis.crypto) Object.defineProperty(globalThis, 'crypto', { value: webcrypto });
 const sockets = new Set();
@@ -62,6 +63,23 @@ async function waitFor(condition, timeout = 12000) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
+
+test('copied hello MAC cannot be re-signed by another relay identity', async () => {
+  const code = makeCode(); const a = state(); const b = state();
+  const one = await RelayRoom.create(code, a.handlers); const two = await RelayRoom.create(code, b.handlers);
+  try {
+    one.start();
+    await waitFor(() => published.some((value) => JSON.parse(value).pubkey === one.id));
+    one.tick();
+    assert.ok(a.statuses.some((status) => status.includes('양쪽에서 새로고침')));
+    const original = published.map((value) => JSON.parse(value)).find((wire) => wire.pubkey === one.id && JSON.parse(wire.content).t === 'hello');
+    const forged = finalizeEvent({ kind: original.kind, created_at: original.created_at, tags: original.tags, content: original.content }, generateSecretKey());
+    two.receiveRelay({ data: JSON.stringify(['EVENT', 'room', forged]) });
+    assert.equal(two.peer, null);
+    two.start();
+    await waitFor(() => a.online && b.online);
+  } finally { one.close(); two.close(); }
+});
 
 test('authenticated peers exchange messages, history and read receipts; a third is rejected', async () => {
   const code = makeCode();
