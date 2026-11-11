@@ -204,7 +204,7 @@ export class RelayRoom {
     try { mac = Uint8Array.from(atob(auth), (character) => character.charCodeAt(0)); } catch { return; }
     const authenticated = JSON.stringify(['another-dimension/relay-auth/v2', this.topic, wire.pubkey, wire.kind, wire.created_at, payload]);
     if (mac.length !== 32 || !crypto_auth_verify(mac, encoder.encode(authenticated), this.authKey)) return;
-    try { this.handle(wire.pubkey, payload); } catch { /* Discard malformed or unauthenticated input. */ }
+    try { this.handle(wire.pubkey, payload, wire.created_at); } catch { /* Discard malformed or unauthenticated input. */ }
   }
 
   allowRelayEvent(socket) {
@@ -241,8 +241,8 @@ export class RelayRoom {
     else if (this.peer.reply) this.sendHandshake('h2', this.peer.reply);
   }
 
-  setPeer(id, instance) {
-    const peer = { id, instance, started: Date.now(), lastSeen: Date.now(), initiator: this.id < id };
+  setPeer(id, instance, helloCreatedAt = 0) {
+    const peer = { id, instance, helloCreatedAt, started: Date.now(), lastSeen: Date.now(), initiator: this.id < id };
     const first = peer.initiator ? { id: this.id, instance: this.instance } : peer;
     const second = peer.initiator ? peer : { id: this.id, instance: this.instance };
     peer.noise = new Noise('NNpsk0', peer.initiator, undefined, { psk: this.psk });
@@ -267,9 +267,10 @@ export class RelayRoom {
     this.highestReceived = -1;
   }
 
-  handle(author, body) {
+  handle(author, body, createdAt = 0) {
     if (body.t === 'hello') {
-      if (!this.peer) this.setPeer(author, body.instance);
+      if (!this.peer) this.setPeer(author, body.instance, createdAt);
+      else if (!this.online && (author !== this.peer.id || body.instance !== this.peer.instance) && createdAt > this.peer.helloCreatedAt) this.setPeer(author, body.instance, createdAt);
       else if (this.online && (author !== this.peer.id || body.instance !== this.peer.instance)) this.handleBusyHello(author, body.instance);
       return;
     }

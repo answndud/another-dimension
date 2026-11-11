@@ -81,6 +81,26 @@ test('copied hello MAC cannot be re-signed by another relay identity', async () 
   } finally { one.close(); two.close(); }
 });
 
+test('a newer hello replaces a peer candidate created by replaying an older hello', async () => {
+  const code = makeCode(); const oldState = state();
+  const oldRoom = await RelayRoom.create(code, oldState.handlers);
+  oldRoom.start();
+  await waitFor(() => published.some((value) => JSON.parse(value).pubkey === oldRoom.id));
+  const oldHello = published.map((value) => JSON.parse(value)).find((wire) => wire.pubkey === oldRoom.id && JSON.parse(wire.content).t === 'hello');
+  oldRoom.close();
+
+  const targetState = state(); const liveState = state();
+  const target = await RelayRoom.create(code, targetState.handlers);
+  const live = await RelayRoom.create(code, liveState.handlers);
+  try {
+    target.receiveRelay({ data: JSON.stringify(['EVENT', 'room', oldHello]) });
+    assert.equal(target.peer?.id, oldRoom.id);
+    await waitFor(() => Math.floor(Date.now() / 1000) > oldHello.created_at, 3000);
+    target.start(); live.start();
+    await waitFor(() => target.peer?.id === live.id && targetState.online && liveState.online);
+  } finally { target.close(); live.close(); }
+});
+
 test('authenticated peers exchange messages, history and read receipts; a third is rejected', async () => {
   const code = makeCode();
   const oldMessages = Array.from({ length: 45 }, (_, index) => ({
