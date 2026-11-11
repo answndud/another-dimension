@@ -32,7 +32,7 @@ Another Dimension은 별도의 프런트엔드 프레임워크나 자체 채팅 
 
 ## 로컬 확인
 
-Node.js 20.19 이상이 필요합니다.
+Node.js 24 LTS가 필요합니다. Node.js 20은 지원이 종료됐습니다. [현재 지원 버전](https://nodejs.org/en/about/previous-releases)을 확인하세요.
 
 ```sh
 cd apps/web
