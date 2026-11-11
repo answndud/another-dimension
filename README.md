@@ -32,7 +32,9 @@ Another Dimension은 별도의 프런트엔드 프레임워크나 자체 채팅 
 
 직접 의존성은 `noise-handshake` **4.2.0**, `nostr-tools` **2.26.0**, `sodium-javascript` **0.8.0**이며, 빌드에는 `esbuild` **0.25.12**를 사용합니다. 버전은 잠금 파일로 관리합니다.
 
-공개 relay, STUN, 정적 호스팅은 외부 서비스입니다. relay는 접속 및 전송 메타데이터와 게시된 암호문을 볼 수 있고, 직접 연결 상대방에게 IP 주소가 노출될 수 있습니다. 프로토콜 구성은 독립적인 보안 검토를 받지 않았습니다. 자세한 내용은 [보안 안내](SECURITY.md)를 참고하세요.
+공개 relay, STUN, 정적 호스팅은 외부 서비스입니다. relay는 접속 및 전송 메타데이터와 게시된 암호문을 볼 수 있고, 직접 연결 상대방에게 IP 주소가 노출될 수 있습니다. 입장 코드를 가진 사람은 접속을 시도할 수 있으며, 유효 이벤트의 재전송으로 연결이 방해받을 수 있습니다. TXT로 저장한 대화는 평문입니다. 프로토콜 구성은 독립적인 보안 검토를 받지 않았습니다.
+
+보안 문제는 공개 이슈에 민감한 세부사항을 게시하지 말고, [비공개 연락 요청 양식](https://github.com/answndud/another-dimension/issues/new?template=security_contact_request.yml)으로 연락 경로를 요청해 주세요.
 
 ## 로컬 확인
 
@@ -55,4 +57,4 @@ Node.js와 Bash가 필요합니다.
 bash scripts/verify_light.sh
 ```
 
-이전 daemon·relay·React 제품과 관련 `reference/`, `docs2/`, `capture/` 자료는 새로운 제품의 동작을 나타내지 않습니다. 이전 코드는 Git 이력에서 확인할 수 있습니다. 보안 상태는 [SECURITY.md](SECURITY.md)를 참고하세요.
+이전 daemon·relay·React 제품의 코드는 Git 이력에서 확인할 수 있습니다.
