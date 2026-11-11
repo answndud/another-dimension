@@ -270,7 +270,7 @@ export class RelayRoom {
   handle(author, body, createdAt = 0) {
     if (body.t === 'hello') {
       if (!this.peer) this.setPeer(author, body.instance, createdAt);
-      else if (!this.online && (author !== this.peer.id || body.instance !== this.peer.instance) && createdAt > this.peer.helloCreatedAt) this.setPeer(author, body.instance, createdAt);
+      else if (!this.online && (author !== this.peer.id || body.instance !== this.peer.instance) && createdAt >= this.peer.helloCreatedAt) this.setPeer(author, body.instance, createdAt);
       else if (this.online && (author !== this.peer.id || body.instance !== this.peer.instance)) this.handleBusyHello(author, body.instance);
       return;
     }

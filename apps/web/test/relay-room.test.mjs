@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { webcrypto, randomBytes } from 'node:crypto';
 import { build } from 'esbuild';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools';
+import sodium from 'sodium-javascript';
 
 if (!globalThis.crypto) Object.defineProperty(globalThis, 'crypto', { value: webcrypto });
 const sockets = new Set();
@@ -41,8 +42,18 @@ class FakeWebSocket {
 globalThis.WebSocket = FakeWebSocket;
 const result = await build({ entryPoints: ['src/relay-room.js'], bundle: true, format: 'esm', platform: 'browser', write: false, logLevel: 'silent' });
 const { RelayRoom } = await import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].contents).toString('base64'));
+const { crypto_auth } = sodium;
 
 function makeCode() { return `AD1-${randomBytes(64).toString('base64url')}`; }
+function signedHello(room, createdAt) {
+  const payload = { v: 1, t: 'hello', instance: room.instance };
+  const authenticated = JSON.stringify(['another-dimension/relay-auth/v2', room.topic, room.id, 24001, createdAt, payload]);
+  const mac = new Uint8Array(32);
+  crypto_auth(mac, new TextEncoder().encode(authenticated), room.authKey);
+  let binary = '';
+  for (const byte of mac) binary += String.fromCharCode(byte);
+  return finalizeEvent({ kind: 24001, created_at: createdAt, tags: [['t', room.topic]], content: JSON.stringify({ ...payload, auth: btoa(binary) }) }, room.signingKey);
+}
 function state(history = []) {
   const value = { online: false, statuses: [], messages: [], receipts: [], batches: [], history };
   value.handlers = {
@@ -99,6 +110,24 @@ test('a newer hello replaces a peer candidate created by replaying an older hell
     target.start(); live.start();
     await waitFor(() => target.peer?.id === live.id && targetState.online && liveState.online);
   } finally { target.close(); live.close(); }
+});
+
+test('a live hello in the same second can replace a replayed candidate', async () => {
+  const code = makeCode();
+  const oldRoom = await RelayRoom.create(code, state().handlers);
+  const target = await RelayRoom.create(code, state().handlers);
+  const live = await RelayRoom.create(code, state().handlers);
+  try {
+    const createdAt = Math.floor(Date.now() / 1000);
+    const replay = signedHello(oldRoom, createdAt);
+    const current = signedHello(live, createdAt);
+    target.receiveRelay({ data: JSON.stringify(['EVENT', 'room', replay]) });
+    assert.equal(target.peer?.id, oldRoom.id);
+    target.receiveRelay({ data: JSON.stringify(['EVENT', 'room', current]) });
+    assert.equal(target.peer?.id, live.id);
+    target.receiveRelay({ data: JSON.stringify(['EVENT', 'room', replay]) });
+    assert.equal(target.peer?.id, live.id);
+  } finally { oldRoom.close(); target.close(); live.close(); }
 });
 
 test('authenticated peers exchange messages, history and read receipts; a third is rejected', async () => {
@@ -166,7 +195,7 @@ test('different room codes do not connect', async () => {
   } finally { one.close(); two.close(); }
 });
 
-test('extra sessions are rejected while a pair is online and can connect after exit', async () => {
+test('extra sessions do not replace the active pair and can connect after exit', async () => {
   const code = makeCode();
   const states = Array.from({ length: 4 }, () => state());
   const rooms = [];
@@ -184,7 +213,8 @@ test('extra sessions are rejected while a pair is online and can connect after e
     await waitFor(() => states.slice(2).some((entry) => entry.statuses.includes('이미 연결되어 있습니다')));
     await new Promise((resolve) => setTimeout(resolve, 1000));
     assert.equal(states[0].online && states[1].online, true);
-    assert.equal(states[2].online || states[3].online, false);
+    assert.equal(rooms[0].peer?.id, rooms[1].id);
+    assert.equal(rooms[1].peer?.id, rooms[0].id);
     rooms[0].close(); rooms[1].close();
     await waitFor(() => states[2].online && states[3].online, 12000);
   } finally {
