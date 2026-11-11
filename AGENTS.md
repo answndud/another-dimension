@@ -3,7 +3,7 @@
 ## 프로젝트 방향
 
 - Another Dimension은 계정과 운영자 서버 없이 사용하는 휘발성 1:1 브라우저 채팅을 목표로 한다.
-- macOS Chrome과 Android Chrome을 지원 대상으로 한다. 정적 웹은 GitHub Pages 기본 주소를 목표로 한다.
+- 지원 대상으로 macOS Chrome을 둔다. 모바일 환경은 지원 범위에서 제외한다. 정적 웹은 GitHub Pages 기본 주소를 목표로 한다.
 - 두 사람이 온라인으로 연결된 동안 텍스트만 교환한다. 코드는 사용자가 보관하고 재사용하며, 새로고침 후 재연결을 위해 현재 탭의 세션 저장소에도 임시 보관한다. 대화는 메모리에만 유지하고 사용자가 명시적으로 TXT를 저장할 수 있다.
 - 순수 HTML·CSS·JavaScript 화면을 기본으로 한다. 실제로 필요한 보안·통신 의존성만 버전을 고정하여 추가한다.
 - 직접 연결을 우선하고 공개 relay 대체 경로를 검토한다. 상대 인증, 암호화, 재전송 방지와 relay 신뢰 경계가 확인되기 전에는 보안 기능이 완성됐다고 주장하지 않는다.
@@ -25,5 +25,5 @@
 ## 빌드와 검증
 
 - 의존성 다운로드를 최소화하고 짧은 focused check를 우선한다. 긴 테스트, 전체 통합 테스트, 장시간 빌드는 사용자가 명시적으로 요청했을 때만 수행한다.
-- 기본 검증은 `bash scripts/verify_light.sh`이다. 사용자가 실제 macOS Chrome과 Android Chrome에서 직접 수동 검증한다.
+- 기본 검증은 `bash scripts/verify_light.sh`이다. 사용자가 실제 macOS Chrome에서 직접 수동 검증한다.
 - 디스크 정리 시 재생성 가능한 `target/`, `.build-cache/cargo-target/`을 우선 확인하며, 소스·문서·private 실험 입력·Git metadata는 보존한다.
