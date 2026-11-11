@@ -96,9 +96,12 @@ test('authenticated peers exchange messages, history and read receipts; a third 
     rooms.push(outsider);
     outsider.start();
     await new Promise((resolve) => setTimeout(resolve, 50));
-    one.hello(); two.hello();
-    await waitFor(() => outsider.peer !== null);
+    outsider.hello();
+    await new Promise((resolve) => setTimeout(resolve, 50));
     await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(one.peer?.id, two.id);
+    assert.equal(two.peer?.id, one.id);
+    assert.equal(outsider.peer, null);
     assert.equal(outsiderState.online, false);
     assert.equal(outsiderState.statuses.includes('이미 연결되어 있습니다'), false);
     outsider.close();

@@ -1,6 +1,7 @@
 import Noise from 'noise-handshake';
 import Cipher from 'noise-handshake/cipher.js';
 import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from 'nostr-tools';
+import { crypto_auth, crypto_auth_verify } from 'sodium-javascript';
 
 const RELAYS = ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net'];
 const KIND = 24001;
@@ -59,13 +60,14 @@ export class RelayRoom {
     try { material = await crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveBits']); }
     finally { raw.fill(0); }
     const derive = (label) => crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: encoder.encode('another-dimension/room/v1'), info: encoder.encode(label) }, material, 256);
-    const [topic, key] = await Promise.all([derive('rendezvous-topic'), derive('noise-psk')]);
-    return new RelayRoom(hex(new Uint8Array(topic)), new Uint8Array(key), handlers);
+    const [topic, key, authKey] = await Promise.all([derive('rendezvous-topic'), derive('noise-psk'), derive('relay-event-auth')]);
+    return new RelayRoom(hex(new Uint8Array(topic)), new Uint8Array(key), handlers, new Uint8Array(authKey));
   }
 
-  constructor(topic, psk, handlers) {
+  constructor(topic, psk, handlers, authKey = psk.slice()) {
     this.topic = topic;
     this.psk = psk;
+    this.authKey = authKey;
     this.handlers = handlers;
     this.signingKey = generateSecretKey();
     this.id = getPublicKey(this.signingKey);
@@ -155,7 +157,10 @@ export class RelayRoom {
 
   publish(payload) {
     if (this.closed) return false;
-    const wire = finalizeEvent({ kind: KIND, created_at: Math.floor(Date.now() / 1000), tags: [['t', this.topic]], content: JSON.stringify(payload) }, this.signingKey);
+    const content = JSON.stringify(payload);
+    const mac = new Uint8Array(32);
+    crypto_auth(mac, encoder.encode(content), this.authKey);
+    const wire = finalizeEvent({ kind: KIND, created_at: Math.floor(Date.now() / 1000), tags: [['t', this.topic]], content: JSON.stringify({ ...payload, auth: base64(mac) }) }, this.signingKey);
     this.publishedEvents.add(wire.id);
     if (this.publishedEvents.size > 512) this.publishedEvents.delete(this.publishedEvents.values().next().value);
     const message = JSON.stringify(['EVENT', wire]);
@@ -194,7 +199,11 @@ export class RelayRoom {
     let body;
     try { body = JSON.parse(wire.content); } catch { return; }
     if (!body || body.v !== 1 || typeof body.t !== 'string' || !/^[0-9a-f]{32}$/.test(body.instance || '')) return;
-    try { this.handle(wire.pubkey, body); } catch { /* Discard malformed or unauthenticated input. */ }
+    const { auth, ...payload } = body;
+    let mac;
+    try { mac = Uint8Array.from(atob(auth), (character) => character.charCodeAt(0)); } catch { return; }
+    if (mac.length !== 32 || !crypto_auth_verify(mac, encoder.encode(JSON.stringify(payload)), this.authKey)) return;
+    try { this.handle(wire.pubkey, payload); } catch { /* Discard malformed or unauthenticated input. */ }
   }
 
   allowRelayEvent(socket) {
@@ -681,6 +690,7 @@ export class RelayRoom {
     for (const socket of this.sockets.values()) socket.close();
     this.sockets.clear();
     this.psk.fill(0);
+    this.authKey.fill(0);
     this.signingKey.fill(0);
     this.clearPeerKeys();
     this.peer = null;
