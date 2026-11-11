@@ -1,6 +1,0 @@
-ADRELAYTRUST1
-bootstrap=<64 hex characters: externally delivered bootstrap public key>
-key=<64 hex characters: SHA-256(raw relay public key)>,<64 hex characters: raw Ed25519 relay public key>
-revoked=<64 hex characters: revoked key id; repeat or omit>
-payload-end
-signature=<128 hex characters: Ed25519 signature over bootstrap..payload-end including final newline>
