@@ -1,4 +1,5 @@
 import { compareMessageOrder, messageInsertionIndex } from "./history-order.js";
+import { ReadQueue } from "./read-queue.js";
 import { RelayRoom } from "./relay-room.js";
 
 const CODE_PREFIX = "AD1-";
@@ -33,6 +34,9 @@ let room = null;
 let roomVersion = 0;
 let messages = [];
 const messageElements = new Map();
+const messagesById = new Map();
+const unreadMessages = new ReadQueue();
+let readFlushScheduled = false;
 
 function showView(view) {
   for (const section of views) section.hidden = section !== view;
@@ -67,6 +71,8 @@ async function returnHome() {
   room = null;
   messages = [];
   messageElements.clear();
+  messagesById.clear();
+  unreadMessages.clear();
   messagesElement.replaceChildren();
   messageInput.value = "";
   messageInput.disabled = true;
@@ -297,8 +303,9 @@ function addMessage(message) {
   }
   messagesElement.insertBefore(item, messagesElement.children[low] || null);
   messageElements.set(message.id, item);
+  messagesById.set(message.id, message);
+  unreadMessages.add(message);
   if (message.mine) renderReceipt(message);
-  messagesElement.scrollTop = messagesElement.scrollHeight;
   return true;
 }
 
@@ -313,30 +320,38 @@ function restoreHistory(batch) {
       addMessage({ ...message, mine, read: mine && message.read === true, delivered: mine });
     }
   }
+  messagesElement.scrollTop = messagesElement.scrollHeight;
   markVisibleMessagesRead();
 }
 
 function receiveMessage(message) {
   const existing = messageElements.has(message.id);
-  const previous = existing && messages.find((entry) => entry.id === message.id && !entry.mine);
+  const previous = existing && messagesById.get(message.id);
   if (previous?.read) room?.sendRead(message.id);
-  addMessage({ ...message, mine: false, read: false });
-  if (!existing && messageElements.has(message.id)) {
+  const inserted = addMessage({ ...message, mine: false, read: false });
+  if (inserted) messagesElement.scrollTop = messagesElement.scrollHeight;
+  if (!existing && inserted) {
     if (document.visibilityState !== "visible" || !document.hasFocus()) notifyMessage();
     markVisibleMessagesRead();
   }
-  return messages.some((entry) => entry.id === message.id && !entry.mine);
+  return messagesById.get(message.id)?.mine === false;
 }
 
 function markVisibleMessagesRead() {
-  if (!room || roomView.hidden || document.visibilityState !== "visible" || !document.hasFocus()) return;
-  const unread = messages.filter((message) => !message.mine && !message.read);
-  for (let offset = 0; offset < unread.length; offset += 20) {
-    const batch = unread.slice(offset, offset + 20);
-    if (room.sendReadBatch(batch.map((message) => message.id))) {
-      for (const message of batch) message.read = true;
+  if (readFlushScheduled || !room || roomView.hidden || document.visibilityState !== "visible" || !document.hasFocus()) return;
+  if (!unreadMessages.size) return;
+  readFlushScheduled = true;
+  requestAnimationFrame(() => {
+    readFlushScheduled = false;
+    if (!room || roomView.hidden || document.visibilityState !== "visible" || !document.hasFocus()) return;
+    const batch = unreadMessages.nextBatch(20);
+    if (!batch.length || !room.sendReadBatch(batch.map((message) => message.id))) return;
+    for (const message of batch) {
+      message.read = true;
+      unreadMessages.remove(message.id);
     }
-  }
+    if (unreadMessages.size) markVisibleMessagesRead();
+  });
 }
 
 function renderReceipt(message) {
@@ -350,8 +365,8 @@ function renderReceipt(message) {
 }
 
 function updateReceipt(receipt) {
-  const message = messages.find((entry) => entry.id === receipt.id && entry.mine);
-  if (!message) return;
+  const message = messagesById.get(receipt.id);
+  if (!message?.mine) return;
   if (receipt.type === "read") message.read = true;
   if (receipt.type === "delivered") message.delivered = true;
   if (receipt.type === "uncertain" && !message.read && !message.delivered) message.uncertain = true;
@@ -407,7 +422,7 @@ messageForm.addEventListener("submit", (event) => {
     messageError.textContent = "메시지를 전송할 수 없습니다.";
     return;
   }
-  addMessage({ ...message, mine: true });
+  if (addMessage({ ...message, mine: true })) messagesElement.scrollTop = messagesElement.scrollHeight;
   messageInput.value = "";
   messageError.textContent = "";
   messageInput.focus();

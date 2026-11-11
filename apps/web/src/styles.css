@@ -67,7 +67,7 @@ textarea[aria-invalid="true"] { border-color: #ed8f99; }
 .retry-message { margin-left: 8px; padding: 3px 7px; font-size: 12px; }
 .messages { min-height: 374px; max-height: 85.8vh; overflow-y: auto; margin: 0; padding: 18px; border: 1px solid #393a40; border-radius: 4px; background: #1d1e22; list-style: none; }
 .messages li + li { margin-top: 20px; }
-.messages li { text-align: left; }
+.messages li { text-align: left; content-visibility: auto; contain-intrinsic-size: auto 64px; }
 .messages li.message-mine { text-align: right; }
 .message-mine p { color: #8bfcb9; }
 .messages time { color: #9d9da5; font-size: 12px; }
