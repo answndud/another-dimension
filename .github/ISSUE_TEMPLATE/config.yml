@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Security issue with sensitive details
-    url: https://github.com/answndud/another-dimension-chat/security/advisories/new
-    about: Use private vulnerability reporting when the report contains exploit details, payloads, logs, endpoints, paths, keys, or other sensitive material.
+  - name: Request a private security contact
+    url: https://github.com/answndud/another-dimension/issues/new?template=security_contact_request.yml
+    about: Do not include sensitive details. Use this form only to request a private contact path.
