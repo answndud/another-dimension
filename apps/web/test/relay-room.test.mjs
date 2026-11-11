@@ -361,6 +361,33 @@ test('history recovers lost batches and acknowledgements while new messages arri
   } finally { one.close(); two.close(); }
 });
 
+test('history sync converges both message sets without duplicate ids under clock skew', async () => {
+  const code = makeCode();
+  const leftMessage = { id: 'a'.repeat(32), text: 'left clock ahead', at: Date.now() + 86_400_000, mine: true, read: false };
+  const rightMessage = { id: 'b'.repeat(32), text: 'right clock behind', at: Date.now() - 86_400_000, mine: true, read: false };
+  const a = state([leftMessage]); const b = state([rightMessage]);
+  for (const value of [a, b]) {
+    value.handlers.historySnapshot = () => ({ floor: null, messages: value.history });
+    value.handlers.historyBatch = (batch) => {
+      value.batches.push(batch);
+      for (const entry of batch.messages) {
+        if (!value.history.some((message) => message.id === entry.id)) value.history.push({ ...entry, mine: !entry.mine });
+      }
+    };
+  }
+  const one = await RelayRoom.create(code, a.handlers); const two = await RelayRoom.create(code, b.handlers);
+  try {
+    one.start(); two.start();
+    await waitFor(() => a.online && b.online);
+    await waitFor(() => a.history.length === 2 && b.history.length === 2);
+    assert.deepEqual(a.history.map((message) => message.id).sort(), b.history.map((message) => message.id).sort());
+    assert.equal(new Set(a.history.map((message) => message.id)).size, 2);
+    assert.equal(new Set(b.history.map((message) => message.id)).size, 2);
+    assert.equal(a.history.find((message) => message.id === rightMessage.id).at, rightMessage.at);
+    assert.equal(b.history.find((message) => message.id === leftMessage.id).at, leftMessage.at);
+  } finally { one.close(); two.close(); }
+});
+
 test('a new room session restores the history held by the remaining peer', async () => {
   const code = makeCode();
   const history = [{ id: '1'.repeat(32), text: 'retained', at: 100, mine: true, read: false }];
