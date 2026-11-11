@@ -166,6 +166,32 @@ test('different room codes do not connect', async () => {
   } finally { one.close(); two.close(); }
 });
 
+test('extra sessions are rejected while a pair is online and can connect after exit', async () => {
+  const code = makeCode();
+  const states = Array.from({ length: 4 }, () => state());
+  const rooms = [];
+  try {
+    for (let index = 0; index < 2; index++) {
+      rooms.push(await RelayRoom.create(code, states[index].handlers));
+      rooms[index].start();
+    }
+    await waitFor(() => states[0].online && states[1].online);
+
+    for (let index = 2; index < 4; index++) {
+      rooms.push(await RelayRoom.create(code, states[index].handlers));
+      rooms[index].start();
+    }
+    await waitFor(() => states.slice(2).some((entry) => entry.statuses.includes('이미 연결되어 있습니다')));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    assert.equal(states[0].online && states[1].online, true);
+    assert.equal(states[2].online || states[3].online, false);
+    rooms[0].close(); rooms[1].close();
+    await waitFor(() => states[2].online && states[3].online, 12000);
+  } finally {
+    for (const room of rooms) room.close();
+  }
+});
+
 test('retries a lost message and receipt using the same logical id', async () => {
   const code = makeCode(); const a = state(); const b = state();
   const one = await RelayRoom.create(code, a.handlers); const two = await RelayRoom.create(code, b.handlers);
