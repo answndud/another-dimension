@@ -16,7 +16,12 @@ export class ReadQueue {
   }
 
   nextBatch(limit = 20) {
-    return Array.from(this.messages.values()).slice(0, limit);
+    const batch = [];
+    for (const message of this.messages.values()) {
+      if (batch.length >= limit) break;
+      batch.push(message);
+    }
+    return batch;
   }
 
   get size() {

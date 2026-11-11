@@ -16,3 +16,14 @@ test('read queue yields bounded batches and preserves the rest for later frames'
   assert.equal(queue.size, 25);
   assert.deepEqual(queue.nextBatch(20), items.slice(20, 40));
 });
+
+test('reading a batch does not iterate the entire large queue', () => {
+  const queue = new ReadQueue();
+  for (let index = 0; index < 10000; index++) queue.add({ id: String(index), mine: false, read: false });
+  const values = queue.messages.values.bind(queue.messages);
+  let visited = 0;
+  queue.messages.values = function* () { for (const item of values()) { visited++; yield item; } };
+  assert.equal(queue.nextBatch(20).length, 20);
+  assert.ok(visited <= 21);
+  assert.equal(queue.size, 10000);
+});
