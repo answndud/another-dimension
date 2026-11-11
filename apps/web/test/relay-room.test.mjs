@@ -292,19 +292,35 @@ test('buffered direct channel falls back to relay and rejection blocks that rela
   } finally { one.close(); two.close(); }
 });
 
+test('a direct channel send exception falls back to relay', async () => {
+  const code = makeCode(); const a = state(); const b = state();
+  const one = await RelayRoom.create(code, a.handlers); const two = await RelayRoom.create(code, b.handlers);
+  try {
+    one.start(); two.start(); await waitFor(() => a.online && b.online);
+    one.peer.channel = { readyState: 'open', bufferedAmount: 0, send: () => { throw new Error('closed channel'); }, close() {} };
+    const message = one.sendMessage('relay after channel error');
+    await waitFor(() => b.messages.some((entry) => entry.id === message.id));
+    assert.equal(b.messages.filter((entry) => entry.id === message.id).length, 1);
+  } finally { one.close(); two.close(); }
+});
 
-test('unconfirmed messages become uncertain after bounded attempts', async () => {
+test('failed relay sends become uncertain after bounded attempts with a stable message id', async () => {
   const code = makeCode(); const a = state(); const b = state();
   const one = await RelayRoom.create(code, a.handlers); const two = await RelayRoom.create(code, b.handlers);
   try {
     one.start(); two.start(); await waitFor(() => a.online && b.online);
     const send = one.sendPayload.bind(one);
-    one.sendPayload = (payload, relayOnly) => payload.type === 'message' ? true : send(payload, relayOnly);
+    const attempts = [];
+    one.sendPayload = (payload, relayOnly) => {
+      if (payload.type === 'message') { attempts.push(payload.id); return false; }
+      return send(payload, relayOnly);
+    };
     const message = one.sendMessage('lost'); const pending = one.pendingMessages.get(message.id);
     for (let i = 0; i < 4; i++) { clearTimeout(pending.timer); one.attemptMessage(pending); }
     assert.equal(one.pendingMessages.size, 0);
     assert.ok(a.receipts.some((receipt) => receipt.id === message.id && receipt.type === 'uncertain'));
     assert.ok(!a.receipts.some((receipt) => receipt.id === message.id && receipt.type === 'delivered'));
+    assert.deepEqual(attempts, Array(4).fill(message.id));
   } finally { one.close(); two.close(); }
 });
 
