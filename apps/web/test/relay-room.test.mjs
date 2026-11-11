@@ -274,6 +274,30 @@ test('disconnect stops pending retries and manual retry retains the message id',
   } finally { one.close(); two.close(); }
 });
 
+test('relay transport restoration lets an uncertain message be retried with its original id', async () => {
+  const code = makeCode(); const a = state(); const b = state();
+  const one = await RelayRoom.create(code, a.handlers); const two = await RelayRoom.create(code, b.handlers);
+  try {
+    one.start(); two.start(); await waitFor(() => a.online && b.online);
+    const send = one.sendPayload.bind(one);
+    one.sendPayload = (payload, relayOnly) => payload.type === 'message' ? false : send(payload, relayOnly);
+    const message = one.sendMessage('retry after relay recovery');
+    for (const socket of one.sockets.values()) socket.blockedUntil = Date.now() + 10000;
+    one.updateTransport();
+    assert.equal(a.online, false);
+    assert.equal(one.pendingMessages.size, 0);
+    assert.ok(a.receipts.some((receipt) => receipt.id === message.id && receipt.type === 'uncertain'));
+
+    for (const socket of one.sockets.values()) socket.blockedUntil = 0;
+    one.updateTransport();
+    assert.equal(a.online, true);
+    one.sendPayload = send;
+    assert.equal(one.retryMessage(message), true);
+    await waitFor(() => b.messages.some((entry) => entry.id === message.id));
+    await waitFor(() => a.receipts.some((receipt) => receipt.id === message.id && receipt.type === 'delivered'));
+  } finally { one.close(); two.close(); }
+});
+
 test('buffered direct channel falls back to relay and rejection blocks that relay', async () => {
   const code = makeCode(); const a = state(); const b = state();
   const one = await RelayRoom.create(code, a.handlers); const two = await RelayRoom.create(code, b.handlers);
