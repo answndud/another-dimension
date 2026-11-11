@@ -260,6 +260,20 @@ test('a new room session restores the history held by the remaining peer', async
   } finally { one.close(); two.close(); replacement?.close(); }
 });
 
+test('history sync does not truncate at the former ten thousand message limit', async () => {
+  const code = makeCode();
+  const history = Array.from({ length: 10001 }, (_, index) => ({
+    id: index.toString(16).padStart(32, '0'), text: `history-${index}`, at: index, mine: true, read: false,
+  }));
+  const a = state(history); const b = state();
+  const one = await RelayRoom.create(code, a.handlers); const two = await RelayRoom.create(code, b.handlers);
+  try {
+    one.start(); two.start();
+    await waitFor(() => a.online && b.online);
+    await waitFor(() => b.batches.flatMap((batch) => batch.messages).length === history.length, 30000);
+  } finally { one.close(); two.close(); }
+});
+
 test('restoring a transport restarts interrupted history sync with a new request', async () => {
   const code = makeCode(); const a = state(); const b = state();
   const one = await RelayRoom.create(code, a.handlers); const two = await RelayRoom.create(code, b.handlers);

@@ -13,13 +13,11 @@ test('display order is deterministic with skewed and equal device times', () => 
   assert.deepEqual(sorted.map((item) => item.id), ['d', 'a', 'b', 'c']);
 });
 
-test('insertion of a late item preserves the most recent ten thousand', () => {
-  const messages = Array.from({ length: 10000 }, (_, i) => ({ id: String(i).padStart(32, '0'), at: i }));
-  const newer = { id: 'new', at: 10001 };
-  messages.splice(messageInsertionIndex(messages, newer), 0, newer);
-  const evicted = messages.shift();
+test('display insertion keeps all entries beyond the former message limit', () => {
+  const messages = Array.from({ length: 10001 }, (_, i) => ({ id: String(i).padStart(32, '0'), at: i }));
   const late = { id: 'late', at: -1 };
-  assert.ok(compareMessageOrder(late, evicted) <= 0);
-  assert.equal(messages.length, 10000);
-  assert.equal(messages.at(-1), newer);
+  messages.splice(messageInsertionIndex(messages, late), 0, late);
+  assert.equal(messages.length, 10002);
+  assert.equal(messages[0], late);
+  assert.equal(messages.at(-1).at, 10000);
 });

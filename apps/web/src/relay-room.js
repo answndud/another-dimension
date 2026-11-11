@@ -11,7 +11,6 @@ const MAX_SEQUENCE = 0xffffffff;
 const MAX_EVENT_SIZE = 100000;
 const HISTORY_BATCH_ITEMS = 20;
 const HISTORY_BATCH_BYTES = 24000;
-const HISTORY_MAX_MESSAGES = 10000;
 const HISTORY_RETRY_MS = 3000;
 const HISTORY_RETRIES = 8;
 const DELIVERY_RETRY_MS = 2000;
@@ -450,7 +449,7 @@ export class RelayRoom {
   startHistorySync(peer) {
     if (!this.handlers.historySnapshot || !this.handlers.historyBatch) return;
     clearTimeout(peer.historyIncoming?.timer);
-    const incoming = { id: newInstance(), expected: 0, count: 0, attempts: 0, started: false, done: false, timer: null };
+    const incoming = { id: newInstance(), expected: 0, attempts: 0, started: false, done: false, timer: null };
     peer.historyIncoming = incoming;
     this.handlers.historyStatus?.('대화 동기화 중');
     const request = () => {
@@ -474,7 +473,7 @@ export class RelayRoom {
     if (current) clearTimeout(current.timer);
     const snapshot = this.handlers.historySnapshot();
     if (!snapshot || !Array.isArray(snapshot.messages) || !validFloor(snapshot.floor)) return;
-    const list = snapshot.messages.slice(-HISTORY_MAX_MESSAGES).filter(validMessage);
+    const list = snapshot.messages.filter(validMessage);
     const outgoing = { id: payload.request, messages: list, floor: snapshot.floor, position: 0, index: 0, attempts: 0, timer: null, batch: null };
     peer.historyOutgoing = outgoing;
     this.sendHistoryBatch(peer, outgoing);
@@ -504,18 +503,17 @@ export class RelayRoom {
 
   handleHistoryBatch(payload) {
     const incoming = this.peer.historyIncoming;
-    if (!incoming || payload.request !== incoming.id || !Number.isInteger(payload.index) || payload.index < 0 || payload.index > HISTORY_MAX_MESSAGES) return;
+    if (!incoming || payload.request !== incoming.id || !Number.isSafeInteger(payload.index) || payload.index < 0) return;
     if (payload.index < incoming.expected) {
       const ack = { type: 'history-ack', request: incoming.id, index: payload.index };
       if (!this.sendPayload(ack, true)) this.sendPayload(ack);
       return;
     }
     if (incoming.done || payload.index !== incoming.expected || !Array.isArray(payload.entries) || payload.entries.length > HISTORY_BATCH_ITEMS ||
-        incoming.count + payload.entries.length > HISTORY_MAX_MESSAGES || typeof payload.done !== 'boolean' ||
+        typeof payload.done !== 'boolean' ||
         (!payload.done && payload.entries.length === 0) || !validFloor(payload.floor) || !payload.entries.every(validMessage)) return;
     clearTimeout(incoming.timer);
     incoming.started = true;
-    incoming.count += payload.entries.length;
     this.handlers.historyBatch({ floor: payload.floor, messages: payload.entries });
     incoming.expected++;
     this.sendPayload({ type: 'history-ack', request: incoming.id, index: payload.index });
@@ -535,7 +533,7 @@ export class RelayRoom {
     outgoing.index++;
     outgoing.batch = null;
     outgoing.attempts = 0;
-    outgoing.timer = setTimeout(() => this.sendHistoryBatch(peer, outgoing), 200);
+    outgoing.timer = setTimeout(() => this.sendHistoryBatch(peer, outgoing), 20);
   }
 
   createPeerConnection() {

@@ -32,7 +32,6 @@ let codeVisible = false;
 let room = null;
 let roomVersion = 0;
 let messages = [];
-let historyFloor = null;
 const messageElements = new Map();
 
 function showView(view) {
@@ -67,7 +66,6 @@ async function returnHome() {
   room?.close();
   room = null;
   messages = [];
-  historyFloor = null;
   messageElements.clear();
   messagesElement.replaceChildren();
   messageInput.value = "";
@@ -133,7 +131,7 @@ async function enterRoom(code) {
       message: (message) => version === roomVersion && receiveMessage(message),
       receipt: (receipt) => { if (version === roomVersion) updateReceipt(receipt); },
       historySnapshot: () => version === roomVersion ? ({
-        floor: historyFloor,
+        floor: null,
         messages: messages.filter((message) => !message.mine || message.delivered || message.read)
           .map(({ id, text, at, mine, read }) => ({ id, text, at, mine, read: read === true })),
       }) : null,
@@ -263,21 +261,9 @@ function formatTimestamp(time, includeDate = false) {
     : clock;
 }
 
-function advanceHistoryFloor(floor) {
-  if (!floor || !Number.isSafeInteger(floor.at) || Math.abs(floor.at) > 8640000000000000 || !/^[0-9a-f]{32}$/.test(floor.id)) return;
-  if (historyFloor && compareMessageOrder(floor, historyFloor) <= 0) return;
-  historyFloor = { at: floor.at, id: floor.id };
-  while (messages.length && compareMessageOrder(messages[0], historyFloor) <= 0) {
-    const removed = messages.shift();
-    messageElements.get(removed.id)?.remove();
-    messageElements.delete(removed.id);
-  }
-}
-
 function addMessage(message) {
-  if (messageElements.has(message.id)) return;
+  if (messageElements.has(message.id)) return false;
   if (!Number.isSafeInteger(message.at) || Math.abs(message.at) > 8640000000000000) message.at = Date.now();
-  if (historyFloor && compareMessageOrder(message, historyFloor) <= 0) return;
   const low = messageInsertionIndex(messages, message);
   messages.splice(low, 0, message);
   const item = document.createElement("li");
@@ -312,17 +298,12 @@ function addMessage(message) {
   messagesElement.insertBefore(item, messagesElement.children[low] || null);
   messageElements.set(message.id, item);
   if (message.mine) renderReceipt(message);
-  while (messages.length > 10000) {
-    const removed = messages.shift();
-    messageElements.get(removed.id)?.remove();
-    messageElements.delete(removed.id);
-    advanceHistoryFloor(removed);
-  }
   messagesElement.scrollTop = messagesElement.scrollHeight;
+  return true;
 }
 
 function restoreHistory(batch) {
-  // Only locally evicted messages advance the cutoff; a peer cannot erase local history.
+  // A timestamp cutoff can discard valid messages when device clocks differ.
   for (const message of batch.messages) {
     const mine = !message.mine;
     if (mine && messageElements.has(message.id)) {
@@ -420,7 +401,7 @@ messageForm.addEventListener("submit", (event) => {
     messageError.textContent = "메시지는 4,000자까지 입력할 수 있습니다.";
     return;
   }
-  const at = Math.max(Date.now(), (historyFloor?.at ?? 0) + 1);
+  const at = Date.now();
   const message = room?.sendMessage(text, at);
   if (!message) {
     messageError.textContent = "메시지를 전송할 수 없습니다.";
